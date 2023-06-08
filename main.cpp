@@ -1,12 +1,13 @@
+//version 1.0
 #define _DISABLE_RECV_LIMIT
 #include <thread>
 #include <vector>
 #include <map>
 #include <fstream>
 #include <filesystem>
-#include "ssocket.hpp"
-#include "strlib.hpp"
-#include "argarse.hpp"
+#include "../cpplibs/ssocket.hpp"
+#include "../cpplibs/strlib.hpp"
+#include "../cpplibs/argparse.hpp"
 using namespace std;
 namespace fs = std::filesystem;
 
@@ -29,9 +30,7 @@ struct srvresp {
 void socksend(SSocket sock, srvresp data) {
 	string headers = strformat("HTTP/1.1 %d\r\nContent-Type: %s; charset=UTF-8\r\n", data.code, contenttype[data.ext].c_str());
 
-	if (data.AcceptRanges) {
-		headers += "Accept-Ranges: bytes\r\n";
-	}
+	if (data.AcceptRanges) headers += "Accept-Ranges: bytes\r\n";
 
 	headers += "Connection: close\r\n";
 	headers += "Server: LWS\r\n";
@@ -42,15 +41,12 @@ void socksend(SSocket sock, srvresp data) {
 			headers += strformat("Content-Range: bytes %zu-%zu/%zu\r\n", data.ContentRangeData, data.filelength - 1, data.filelength);
 			headers += strformat("Content-Length: %zu\r\n\r\n", data.filelength - data.ContentRangeData);
 			file.seekg(data.ContentRangeData);
-		} else {
-			headers += strformat("Content-Length: %zu\r\n\r\n", data.filelength);
-		}
+		} else headers += strformat("Content-Length: %zu\r\n\r\n", data.filelength);
+		
 		
 		sock.ssend(headers);
 
-		if (data.method == "GET" || data.method == "POST") {
-			sock.ssend_file(file);
-		}
+		if (data.method == "GET" || data.method == "POST") sock.ssend_file(file);
 
 		file.close();
 	} else {
@@ -58,14 +54,11 @@ void socksend(SSocket sock, srvresp data) {
 			headers += strformat("Content-Range: bytes %zu-%zu/%zu\r\n", data.ContentRangeData, data.textdata.size() - 1, data.textdata.size());
 			headers += strformat("Content-Length: %zu\r\n\r\n", data.textdata.size() - data.ContentRangeData);
 			data.textdata = data.textdata.substr(data.ContentRangeData);
-		} else {
-			headers += strformat("Content-Length: %zu\r\n\r\n", data.textdata.size());
-		}
+		} else headers += strformat("Content-Length: %zu\r\n\r\n", data.textdata.size());
+		
 		sock.ssend(headers);
 
-		if (data.method == "GET" || data.method == "POST") {
-			sock.ssend(data.textdata);
-		}
+		if (data.method == "GET" || data.method == "POST") sock.ssend(data.textdata);
 	}
 
 }
@@ -81,9 +74,7 @@ void handler(SSocket sock) {
 		vector<string> cltmp = split(clrecv, "\r\n");
 		vector<string> ftmp = split(cltmp[0], " ");
 
-		if (ftmp.size() < 3) {
-			throw 400;
-		}
+		if (ftmp.size() < 3) throw 400;
 
 		string method = ftmp[0];
 		string default_path = urlDecode(ftmp[1]);
@@ -100,15 +91,8 @@ void handler(SSocket sock) {
 		if (fs::exists(path)) {
 			if (fs::is_directory(path)) {
 //-------------------------index.html-------------------------
-				if (fs::exists(path / "index.html") && fs::is_regular_file(path / "index.html")) {
-
-					socksend(sock, {.code = 200, .method = method, .filestream = true, .filepath = path / "index.html", .filelength = fs::file_size(path / "index.html"), .AcceptRanges = true });
-
-				} else if (fs::exists(path / "index.htm") && fs::is_regular_file(path / "index.htm")) {
-
-					socksend(sock, { .code = 200, .method = method, .filestream = true, .filepath = path / "index.htm", .filelength = fs::file_size(path / "index.htm"), .AcceptRanges = true });
-
-				}
+				if (fs::exists(path / "index.html") && fs::is_regular_file(path / "index.html")) socksend(sock, {.code = 200, .method = method, .filestream = true, .filepath = path / "index.html", .filelength = fs::file_size(path / "index.html"), .AcceptRanges = true });
+				else if (fs::exists(path / "index.htm") && fs::is_regular_file(path / "index.htm")) socksend(sock, { .code = 200, .method = method, .filestream = true, .filepath = path / "index.htm", .filelength = fs::file_size(path / "index.htm"), .AcceptRanges = true });
 //------------------------------------------------------------
 //----------------------directory listing---------------------
 				else {
@@ -161,7 +145,7 @@ void handler(SSocket sock) {
 				}
 			}
 //------------------------------------------------------------
-		} else { throw 404; }
+		} else throw 404;
 
 
 	} catch (int code) {
