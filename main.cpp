@@ -1,12 +1,13 @@
+// version 1.1
 #define _DISABLE_RECV_LIMIT
 #include <thread>
 #include <vector>
 #include <map>
 #include <fstream>
 #include <filesystem>
-#include "ssocket.hpp"
-#include "strlib.hpp"
-#include "argarse.hpp"
+#include "../cpplibs/ssocket.hpp"
+#include "../cpplibs/strlib.hpp"
+#include "../cpplibs/argarse.hpp"
 using namespace std;
 namespace fs = std::filesystem;
 
@@ -212,7 +213,7 @@ int main(int argc, char** argv) {
 		sock.sbind("", port);
 		sock.slisten(0);
 	}
-	catch (int e) { cout << "Error: " << e << endl; }
+	catch (int e) { cout << "Error: " << e << endl; exit(EXIT_FAILURE); }
 
 	while (true) {
 		try { thread(handler, sock.saccept()).detach(); } catch (...) {}
