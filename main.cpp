@@ -1,17 +1,16 @@
-//version 1.0
 #define _DISABLE_RECV_LIMIT
 #include <thread>
 #include <vector>
 #include <map>
 #include <fstream>
 #include <filesystem>
-#include "../cpplibs/ssocket.hpp"
-#include "../cpplibs/strlib.hpp"
-#include "../cpplibs/argparse.hpp"
+#include "ssocket.hpp"
+#include "strlib.hpp"
+#include "argarse.hpp"
 using namespace std;
 namespace fs = std::filesystem;
 
-map<string, string> contenttype = { {"html", "text/html"}, {"htm", "text/html"}, {"txt", "text/plain"}, {"ico", "image/x-icon"}, {"css", "text/css"}, {"js", "application/javascript"}, {"jpg", "image/jpeg"},{"png", "image/png"}, {"gif", "image/gif"}, {"mp3", "audio/mp3"}, {"ogg", "audio/ogg"}, {"wav", "audio/wav"}, {"opus", "audio/opus"}, {"m4a", "audio/mp4"}, {"mp4", "video/mp4"}, {"webm", "video/webm"}, {"pdf", "application/pdf"}, {"json", "text/json"}, {"xml", "text/xml"}, {"image", "svg+xml"}, {"other", "application/octet-stream"}};
+map<string, string> contenttype = { {"html", "text/html"}, {"htm", "text/html"}, {"txt", "text/plain"}, {"py", "text/x-python"}, {"ico", "image/x-icon"}, {"css", "text/css"}, {"js", "application/javascript"}, {"jpg", "image/jpeg"},{"png", "image/png"}, {"gif", "image/gif"}, {"mp3", "audio/mp3"}, {"ogg", "audio/ogg"}, {"wav", "audio/wav"}, {"opus", "audio/opus"}, {"m4a", "audio/mp4"}, {"mp4", "video/mp4"}, {"webm", "video/webm"}, {"pdf", "application/pdf"}, {"json", "text/json"}, {"xml", "text/xml"}, {"image", "svg+xml"}, {"other", "application/octet-stream"}};
 vector<string> cgidirs = { "cgi-bin", "htbin" };
 
 struct srvresp {
@@ -30,7 +29,9 @@ struct srvresp {
 void socksend(SSocket sock, srvresp data) {
 	string headers = strformat("HTTP/1.1 %d\r\nContent-Type: %s; charset=UTF-8\r\n", data.code, contenttype[data.ext].c_str());
 
-	if (data.AcceptRanges) headers += "Accept-Ranges: bytes\r\n";
+	if (data.AcceptRanges) {
+		headers += "Accept-Ranges: bytes\r\n";
+	}
 
 	headers += "Connection: close\r\n";
 	headers += "Server: LWS\r\n";
@@ -41,12 +42,15 @@ void socksend(SSocket sock, srvresp data) {
 			headers += strformat("Content-Range: bytes %zu-%zu/%zu\r\n", data.ContentRangeData, data.filelength - 1, data.filelength);
 			headers += strformat("Content-Length: %zu\r\n\r\n", data.filelength - data.ContentRangeData);
 			file.seekg(data.ContentRangeData);
-		} else headers += strformat("Content-Length: %zu\r\n\r\n", data.filelength);
+		} else {
+			headers += strformat("Content-Length: %zu\r\n\r\n", data.filelength);
+		}
 		
-		
-		sock.ssend(headers);
+		sock.ssendall(headers);
 
-		if (data.method == "GET" || data.method == "POST") sock.ssend_file(file);
+		if (data.method == "GET" || data.method == "POST") {
+			sock.ssend_file(file);
+		}
 
 		file.close();
 	} else {
@@ -54,45 +58,76 @@ void socksend(SSocket sock, srvresp data) {
 			headers += strformat("Content-Range: bytes %zu-%zu/%zu\r\n", data.ContentRangeData, data.textdata.size() - 1, data.textdata.size());
 			headers += strformat("Content-Length: %zu\r\n\r\n", data.textdata.size() - data.ContentRangeData);
 			data.textdata = data.textdata.substr(data.ContentRangeData);
-		} else headers += strformat("Content-Length: %zu\r\n\r\n", data.textdata.size());
-		
-		sock.ssend(headers);
+		} else {
+			headers += strformat("Content-Length: %zu\r\n\r\n", data.textdata.size());
+		}
+		sock.ssendall(headers);
 
-		if (data.method == "GET" || data.method == "POST") sock.ssend(data.textdata);
+		if (data.method == "GET" || data.method == "POST") {
+			sock.ssendall(data.textdata);
+		}
 	}
 
 }
 
 void handler(SSocket sock) {
 	try {
-		string clrecv = sock.srecv(65536);
+		auto clrecv_char = sock.srecv_char(65536);
+		string clrecv(clrecv_char.value, clrecv_char.value + clrecv_char.length);
 
 		if (clrecv.length() == 0) {
 			sock.sclose();
 			return;
 		}
-		vector<string> cltmp = split(clrecv, "\r\n");
-		vector<string> ftmp = split(cltmp[0], " ");
 
-		if (ftmp.size() < 3) throw 400;
+		auto clrtmp = split(clrecv, "\r\n\r\n", 1);
+		string httphead = clrtmp[0];
+		string httpdata = clrtmp[1];
 
-		string method = ftmp[0];
-		string default_path = urlDecode(ftmp[1]);
-		string custom_path = ftmp[1].substr(1);
-		fs::path path = fs::current_path() / strtou8(urlDecode(custom_path));
-		string version = ftmp[2];
+		vector<string> headtmp = split(httphead, "\r\n");
+		vector<string> httpstate = split(headtmp[0], " ");
+
+		if (httpstate.size() < 3) { throw 400; }
+
+		string method = httpstate[0];
+		string default_path = urlDecode(httpstate[1]);
+		string custom_path = httpstate[1].substr(1);
+		string version = httpstate[2];
 		map<string, string> user_agent;
-
-		for (int i = 1; i < cltmp.size(); i++) {
-			auto tmp = split(cltmp[i], ": ");
+		
+		fs::path path = fs::current_path() / strtou8(urlDecode(custom_path));
+//---------------------parsing user agent---------------------
+		for (int i = 1; i < headtmp.size(); i++) {
+			auto tmp = split(headtmp[i], ": ");
 			if (tmp.size() > 1) user_agent[tmp[0]] = tmp[1];
 		}
+//------------------------------------------------------------
+//----------------------recv client data----------------------
+		if (user_agent.find("Content-Type") != user_agent.end()) {
+			size_t length = stoull(user_agent["Content-Length"]);
+			length -= httpdata.length();
 
+			while (length > 0) {
+				auto datarecv = sock.srecv_char(65536);
+				if (datarecv.length == 0) return;
+				httpdata.append(datarecv.value, datarecv.value + datarecv.length);
+
+				length -= datarecv.length;
+			}
+		}
+//------------------------------------------------------------
 		if (fs::exists(path)) {
 			if (fs::is_directory(path)) {
 //-------------------------index.html-------------------------
-				if (fs::exists(path / "index.html") && fs::is_regular_file(path / "index.html")) socksend(sock, {.code = 200, .method = method, .filestream = true, .filepath = path / "index.html", .filelength = fs::file_size(path / "index.html"), .AcceptRanges = true });
-				else if (fs::exists(path / "index.htm") && fs::is_regular_file(path / "index.htm")) socksend(sock, { .code = 200, .method = method, .filestream = true, .filepath = path / "index.htm", .filelength = fs::file_size(path / "index.htm"), .AcceptRanges = true });
+				if (fs::exists(path / "index.html") && fs::is_regular_file(path / "index.html")) {
+
+					socksend(sock, {.code = 200, .method = method, .filestream = true, .filepath = path / "index.html", .filelength = fs::file_size(path / "index.html"), .AcceptRanges = true });
+
+				} else if (fs::exists(path / "index.htm") && fs::is_regular_file(path / "index.htm")) {
+
+					socksend(sock, { .code = 200, .method = method, .filestream = true, .filepath = path / "index.htm", .filelength = fs::file_size(path / "index.htm"), .AcceptRanges = true });
+
+				}
 //------------------------------------------------------------
 //----------------------directory listing---------------------
 				else {
@@ -145,15 +180,16 @@ void handler(SSocket sock) {
 				}
 			}
 //------------------------------------------------------------
-		} else throw 404;
+		}
+		else { throw 404; }
 
 
 	} catch (int code) {
 		switch (code) {
-		case 400: socksend(sock, { code, "<h1>400 Bad request</h1><br>" }); break;
-		case 403: socksend(sock, { code, "<h1>403 Forbidden</h1>" }); break;
-		case 404: socksend(sock, { code, "<h1>404 Not Found</h1>" }); break;
-		default: socksend(sock, { 500, "<h1>500 Internal server error</h1><br>" }); break;
+			case 400: socksend(sock, { code, "<h1>400 Bad request</h1><br>" }); break;
+			case 403: socksend(sock, { code, "<h1>403 Forbidden</h1>" }); break;
+			case 404: socksend(sock, { code, "<h1>404 Not Found</h1>" }); break;
+			default: socksend(sock, { 500, "<h1>500 Internal server error</h1><br>" }); break;
 		}
 	}
 	sock.sclose();
