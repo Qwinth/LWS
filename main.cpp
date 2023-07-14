@@ -5,9 +5,9 @@
 #include <map>
 #include <fstream>
 #include <filesystem>
-#include "../cpplibs/ssocket.hpp"
-#include "../cpplibs/strlib.hpp"
-#include "../cpplibs/argarse.hpp"
+#include "ssocket.hpp"
+#include "strlib.hpp"
+#include "argarse.hpp"
 using namespace std;
 namespace fs = std::filesystem;
 
