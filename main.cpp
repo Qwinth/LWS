@@ -243,7 +243,7 @@ int main(int argc, char** argv) {
 		sock.slisten(0);
 	} catch (int e) { cout << "Error: " <<  strerror(e) << endl; exit(e); }
 	
-	for (int i = 1; i < pp; i++) process("HTTP Worker").start([&](){ while (true) try { thread(handler, sock.saccept()).detach(); } catch (...) {} })->detach();
+	for (int i = 1; i < pp; i++) process("HTTP Worker").start([&](process){ while (true) try { thread(handler, sock.saccept()).detach(); } catch (...) {} })->detach();
 
 	while (true) try { thread(handler, sock.saccept()).detach(); } catch (...) {}
 }
