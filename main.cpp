@@ -1,24 +1,28 @@
-// version 1.1
+// version 1.3
 #define _DISABLE_RECV_LIMIT
 #include <thread>
 #include <vector>
 #include <map>
 #include <fstream>
 #include <filesystem>
-#include "ssocket.hpp"
-#include "strlib.hpp"
-#include "argarse.hpp"
+#include <set>
+#include "../cpplibs/ssocket.hpp"
+#include "../cpplibs/strlib.hpp"
+#include "../cpplibs/argarse.hpp"
+#include "../cpplibs/multiprocessing.hpp"
 using namespace std;
 namespace fs = std::filesystem;
 
 map<string, string> contenttype = { {"html", "text/html"}, {"htm", "text/html"}, {"txt", "text/plain"}, {"py", "text/x-python"}, {"ico", "image/x-icon"}, {"css", "text/css"}, {"js", "application/javascript"}, {"jpg", "image/jpeg"},{"png", "image/png"}, {"gif", "image/gif"}, {"mp3", "audio/mp3"}, {"ogg", "audio/ogg"}, {"wav", "audio/wav"}, {"opus", "audio/opus"}, {"m4a", "audio/mp4"}, {"mp4", "video/mp4"}, {"webm", "video/webm"}, {"pdf", "application/pdf"}, {"json", "text/json"}, {"xml", "text/xml"}, {"image", "svg+xml"}, {"other", "application/octet-stream"}};
 vector<string> cgidirs = { "cgi-bin", "htbin" };
+int recvtimeout;
 
 struct srvresp {
 	int code;
 	string textdata;
 	string ext = "html";
 	string method = "GET";
+	string connection = "close";
 	bool filestream = false;
 	fs::path filepath;
 	size_t filelength;
@@ -34,7 +38,9 @@ void socksend(SSocket sock, srvresp data) {
 		headers += "Accept-Ranges: bytes\r\n";
 	}
 
-	headers += "Connection: close\r\n";
+	headers += strformat("Connection: %s\r\n", data.connection.c_str());
+	if (tolowerString(data.connection) != "close") headers += strformat("Keep-Alive: timeout=%d, max=100\r\n", recvtimeout);
+
 	headers += "Server: LWS\r\n";
 
 	if (data.filestream) {
@@ -72,150 +78,172 @@ void socksend(SSocket sock, srvresp data) {
 }
 
 void handler(SSocket sock) {
-	try {
-		auto clrecv_char = sock.srecv_char(65536);
-		string clrecv(clrecv_char.value, clrecv_char.value + clrecv_char.length);
+	sock.setrecvtimeout(recvtimeout);
+	bool connection_keep_alive = false;
+	string client_connection = "close";
 
-		if (clrecv.length() == 0) {
-			sock.sclose();
-			return;
-		}
+	do {
+		try {
+			auto clrecv_char = sock.srecv_char(65535);
+			string clrecv(clrecv_char.value, clrecv_char.value + clrecv_char.length);
 
-		auto clrtmp = split(clrecv, "\r\n\r\n", 1);
-		string httphead = clrtmp[0];
-		string httpdata = clrtmp[1];
-
-		vector<string> headtmp = split(httphead, "\r\n");
-		vector<string> httpstate = split(headtmp[0], " ");
-
-		if (httpstate.size() < 3) { throw 400; }
-
-		string method = httpstate[0];
-		string default_path = urlDecode(httpstate[1]);
-		string custom_path = httpstate[1].substr(1);
-		string version = httpstate[2];
-		map<string, string> user_agent;
-		
-		fs::path path = fs::current_path() / strtou8(urlDecode(custom_path));
-//---------------------parsing user agent---------------------
-		for (int i = 1; i < headtmp.size(); i++) {
-			auto tmp = split(headtmp[i], ": ");
-			if (tmp.size() > 1) user_agent[tmp[0]] = tmp[1];
-		}
-//------------------------------------------------------------
-//----------------------recv client data----------------------
-		if (user_agent.find("Content-Type") != user_agent.end()) {
-			size_t length = stoull(user_agent["Content-Length"]);
-			length -= httpdata.length();
-
-			while (length > 0) {
-				auto datarecv = sock.srecv_char(65536);
-				if (datarecv.length == 0) return;
-				httpdata.append(datarecv.value, datarecv.value + datarecv.length);
-
-				length -= datarecv.length;
+			if (clrecv.length() == 0) {
+				break;
 			}
-		}
-//------------------------------------------------------------
-		if (fs::exists(path)) {
-			if (fs::is_directory(path)) {
-//-------------------------index.html-------------------------
-				if (fs::exists(path / "index.html") && fs::is_regular_file(path / "index.html")) {
 
-					socksend(sock, {.code = 200, .method = method, .filestream = true, .filepath = path / "index.html", .filelength = fs::file_size(path / "index.html"), .AcceptRanges = true });
+			auto clrtmp = split(clrecv, "\r\n\r\n", 1);
+			string httphead = clrtmp[0];
+			string httpdata = clrtmp[1];
 
-				} else if (fs::exists(path / "index.htm") && fs::is_regular_file(path / "index.htm")) {
+			vector<string> headtmp = split(httphead, "\r\n");
+			vector<string> httpstate = split(headtmp[0], " ");
 
-					socksend(sock, { .code = 200, .method = method, .filestream = true, .filepath = path / "index.htm", .filelength = fs::file_size(path / "index.htm"), .AcceptRanges = true });
+			if (httpstate.size() < 3) { throw 400; }
 
+			string method = httpstate[0];
+			string default_path = urlDecode(httpstate[1]);
+			string custom_path = httpstate[1].substr(1);
+			string version = httpstate[2];
+			map<string, string> user_agent;
+			
+			fs::path path = fs::current_path() / strtou8(urlDecode(custom_path));
+	//---------------------parsing user agent---------------------
+			for (int i = 1; i < headtmp.size(); i++) {
+				auto tmp = split(headtmp[i], ": ");
+				if (tmp.size() > 1) user_agent[tmp[0]] = tmp[1];
+			}
+	//------------------------------------------------------------
+	//-----------------------get connection-----------------------
+	if (user_agent.find("Connection") != user_agent.end()) {
+		connection_keep_alive = (tolowerString(user_agent["Connection"]) == "keep-alive") ? true : false;
+		if (connection_keep_alive) client_connection = tolowerString(user_agent["Connection"]);
+	}
+	//------------------------------------------------------------
+	//----------------------recv client data----------------------
+			if (user_agent.find("Content-Type") != user_agent.end()) {
+				size_t length = stoull(user_agent["Content-Length"]);
+				length -= httpdata.length();
+
+				while (length > 0) {
+					auto datarecv = sock.srecv_char(65536);
+					if (datarecv.length == 0) return;
+					httpdata.append(datarecv.value, datarecv.value + datarecv.length);
+
+					length -= datarecv.length;
 				}
-//------------------------------------------------------------
-//----------------------directory listing---------------------
-				else {
-					string textdata = strformat("<!DOCTYPE html>\r\n<html>\r\n<head>\r\n<title>Directory listing for %s</title>\r\n<body>\r\n<h1>Directory listing for %s</h1>\r\n<hr>\r\n<ul>\r\n", default_path.c_str(), default_path.c_str());
-					for (auto const &i : fs::directory_iterator(path)) {
+			}
+	//------------------------------------------------------------
+			if (fs::exists(path)) {
+				if (fs::is_directory(path)) {
+	//-------------------------index.html-------------------------
+					if (fs::exists(path / "index.html") && fs::is_regular_file(path / "index.html")) {
 
-						auto fname = i.path().filename().u8string();
-						if (i.is_directory()) { textdata += strformat("<li><a href = \"%s/\">%s</a></li>\r\n", urlEncode(u8tostr(fname)).c_str(), fname.c_str()); }
-						else { textdata += strformat("<li><a href = \"%s\">%s</a></li>\r\n", urlEncode(u8tostr(fname)).c_str(), fname.c_str()); }
+						socksend(sock, {.code = 200, .method = method, .connection = client_connection, .filestream = true, .filepath = path / "index.html", .filelength = fs::file_size(path / "index.html"), .AcceptRanges = true });
+
+					} else if (fs::exists(path / "index.htm") && fs::is_regular_file(path / "index.htm")) {
+
+						socksend(sock, { .code = 200, .method = method, .connection = client_connection, .filestream = true, .filepath = path / "index.htm", .filelength = fs::file_size(path / "index.htm"), .AcceptRanges = true });
 
 					}
-					textdata += "</ul>\r\n<hr>\r\n";
+	//------------------------------------------------------------
+	//----------------------directory listing---------------------
+					else {
+						string textdata = strformat("<!DOCTYPE html>\r\n<html>\r\n<head>\r\n<title>Directory listing for %s</title>\r\n</head>\r\n<body>\r\n<h1>Directory listing for %s</h1>\r\n<hr>\r\n<ul>\r\n", default_path.c_str(), default_path.c_str());
+						
+						set<fs::path> sorted;
+						for (auto &i : fs::directory_iterator(path)) sorted.insert(i.path());
 
-					socksend(sock, { .code = 200, .textdata = textdata, .method = method });
+						for (auto  &i : sorted) {
+							auto fname = i.filename().u8string();
+
+							if (fs::is_directory(i)) { textdata += strformat("<li><a href = \"%s/\">%s</a></li>\r\n", urlEncode(u8tostr(fname)).c_str(), fname.c_str()); }
+							else { textdata += strformat("<li><a href = \"%s\">%s</a></li>\r\n", urlEncode(u8tostr(fname)).c_str(), fname.c_str()); }
+
+						}
+						textdata += "</ul>\r\n<hr>\r\n";
+
+						socksend(sock, { .code = 200, .textdata = textdata, .method = method, .connection = client_connection });
+					}
 				}
-			}
-//------------------------------------------------------------
-//-------------------process binary content-------------------
-			else {
-				string ext = path.extension().string().substr(1);
-
-				if (user_agent.find("Range") != user_agent.end()) {
-					size_t range = stoull(split(split(user_agent["Range"], "=")[1], "-")[0]);
-					
-					srvresp resp;
-					resp.code = 206;
-					resp.ext = (contenttype.find(ext) != contenttype.end()) ? ext : "other";
-					resp.method = method;
-					resp.AcceptRanges = true;
-					resp.filestream = true;
-					resp.filepath = path;
-					resp.filelength = fs::file_size(path);
-					resp.ContentRange = true;
-					resp.ContentRangeData = range;
-
-					socksend(sock, resp);
-				}
-
+	//------------------------------------------------------------
+	//-------------------process binary content-------------------
 				else {
-					srvresp resp;
-					resp.code = 200;
-					resp.ext = (contenttype.find(ext) != contenttype.end()) ? ext : "other";
-					resp.method = method;
-					resp.AcceptRanges = true;
-					resp.filestream = true;
-					resp.filepath = path;
-					resp.filelength = fs::file_size(path);
-					
-					socksend(sock, resp);
+					string ext = path.extension().string().substr(1);
+
+					if (user_agent.find("Range") != user_agent.end()) {
+						size_t range = stoull(split(split(user_agent["Range"], "=")[1], "-")[0]);
+						
+						srvresp resp;
+						resp.code = 206;
+						resp.ext = (contenttype.find(ext) != contenttype.end()) ? ext : "other";
+						resp.method = method;
+						resp.connection = client_connection;
+						resp.AcceptRanges = true;
+						resp.filestream = true;
+						resp.filepath = path;
+						resp.filelength = fs::file_size(path);
+						resp.ContentRange = true;
+						resp.ContentRangeData = range;
+
+						socksend(sock, resp);
+					}
+
+					else {
+						srvresp resp;
+						resp.code = 200;
+						resp.ext = (contenttype.find(ext) != contenttype.end()) ? ext : "other";
+						resp.method = method;
+						resp.connection = client_connection;
+						resp.AcceptRanges = true;
+						resp.filestream = true;
+						resp.filepath = path;
+						resp.filelength = fs::file_size(path);
+						
+						socksend(sock, resp);
+					}
 				}
+	//------------------------------------------------------------
 			}
-//------------------------------------------------------------
-		}
-		else { throw 404; }
+			else { throw 404; }
 
 
-	} catch (int code) {
-		switch (code) {
-			case 400: socksend(sock, { code, "<h1>400 Bad request</h1><br>" }); break;
-			case 403: socksend(sock, { code, "<h1>403 Forbidden</h1>" }); break;
-			case 404: socksend(sock, { code, "<h1>404 Not Found</h1>" }); break;
-			default: socksend(sock, { 500, "<h1>500 Internal server error</h1><br>" }); break;
+		} catch (int code) {
+			switch (code) {
+				case 400: socksend(sock, { .code = code, .textdata = "<h1>400 Bad request</h1><br>", .connection = client_connection }); break;
+				case 403: socksend(sock, { .code = code, .textdata = "<h1>403 Forbidden</h1>", .connection = client_connection }); break;
+				case 404: socksend(sock, { .code = code, .textdata = "<h1>404 Not Found</h1>", .connection = client_connection }); break;
+				default: socksend(sock, { .code = 500, .textdata = "<h1>500 Internal server error</h1><br>", .connection = client_connection }); break;
+			}
 		}
-	}
+	} while (connection_keep_alive);
 	sock.sclose();
 }
 
 int main(int argc, char** argv) {
+	setlocale(LC_ALL, "");
+	
 	ArgumentParser parser(argc, argv);
 	parser.add_argument({ .flag1 = "-p", .flag2 = "--port", .type = "int" });
 	parser.add_argument({ .flag1 = "-rd", .flag2 = "--root-directory" });
+	parser.add_argument({ .flag1 = "-pp", .flag2 = "--parallel-processes", .type = "int" });
 	parser.add_argument({ .flag2 = "--CGI", .without_value = true });
+	parser.add_argument({ .flag1 = "-t", .flag2 = "--timeout", .type = "int" });
 	auto i = parser.parse();
 
 	int port = (i["--port"].str != "false") ? i["--port"].integer : 80;
 	if (i["--root-directory"].str != "false") fs::current_path(strtou8(i["--root-directory"].str));
+	int pp = (i["--parallel-processes"].str != "false") ? i["--parallel-processes"].integer : 1;
+	recvtimeout = (i["--timeout"].str != "false") ? i["--timeout"].integer : 5;
 
 	SSocket sock(AF_INET, SOCK_STREAM);
-
+	
 	try {
 		sock.ssetsockopt(SOL_SOCKET, SO_REUSEADDR, 1);
 		sock.sbind("", port);
 		sock.slisten(0);
-	}
-	catch (int e) { cout << "Error: " << e << endl; exit(EXIT_FAILURE); }
+	} catch (int e) { cout << "Error: " <<  strerror(e) << endl; exit(e); }
+	
+	for (int i = 1; i < pp; i++) process("HTTP Worker").start([&](){ while (true) try { thread(handler, sock.saccept()).detach(); } catch (...) {} })->detach();
 
-	while (true) {
-		try { thread(handler, sock.saccept()).detach(); } catch (...) {}
-	}
+	while (true) try { thread(handler, sock.saccept()).detach(); } catch (...) {}
 }
