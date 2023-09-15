@@ -8,7 +8,7 @@
 #include <set>
 #include "cpplibs/ssocket.hpp"
 #include "cpplibs/strlib.hpp"
-#include "cpplibs/argarse.hpp"
+#include "cpplibs/argparse.hpp"
 #include "cpplibs/multiprocessing.hpp"
 using namespace std;
 namespace fs = std::filesystem;
