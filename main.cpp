@@ -6,6 +6,7 @@
 #include <fstream>
 #include <filesystem>
 #include <set>
+#include <csignal>
 #include "cpplibs/ssocket.hpp"
 #include "cpplibs/strlib.hpp"
 #include "cpplibs/argparse.hpp"
@@ -234,7 +235,8 @@ int main(int argc, char** argv) {
 	if (i["--root-directory"].str != "false") fs::current_path(strtou8(i["--root-directory"].str));
 	int pp = (i["--parallel-processes"].str != "false") ? i["--parallel-processes"].integer : 1;
 	recvtimeout = (i["--timeout"].str != "false") ? i["--timeout"].integer : 5;
-
+	
+	signal(SIGINT, [](int e){exit(0);});
 	SSocket sock(AF_INET, SOCK_STREAM);
 	
 	try {
