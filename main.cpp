@@ -240,7 +240,7 @@ int main(int argc, char** argv) {
 	try {
 		sock.ssetsockopt(SOL_SOCKET, SO_REUSEADDR, 1);
 		sock.sbind("", port);
-		sock.slisten(128);
+		sock.slisten(0);
 	} catch (int e) { cout << "Error: " <<  strerror(e) << endl; exit(e); }
 	
 	for (int i = 1; i < pp; i++) process("HTTP Worker").start([&](process){ while (true) try { thread(handler, sock.saccept()).detach(); } catch (...) {} })->detach();
