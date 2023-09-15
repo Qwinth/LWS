@@ -125,7 +125,7 @@ void handler(SSocket sock) {
 				length -= httpdata.length();
 
 				while (length > 0) {
-					auto datarecv = sock.srecv_char(65536);
+					auto datarecv = sock.srecv_char(65535);
 					if (datarecv.length == 0) return;
 					httpdata.append(datarecv.value, datarecv.value + datarecv.length);
 
