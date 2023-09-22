@@ -1,4 +1,4 @@
-// version 1.3
+// version 1.4
 #define _DISABLE_RECV_LIMIT
 #include <thread>
 #include <vector>
@@ -10,7 +10,9 @@
 #include "cpplibs/ssocket.hpp"
 #include "cpplibs/strlib.hpp"
 #include "cpplibs/argparse.hpp"
+#ifndef _WIN32
 #include "cpplibs/multiprocessing.hpp"
+#endif
 using namespace std;
 namespace fs = std::filesystem;
 
@@ -86,7 +88,7 @@ void handler(SSocket sock) {
 	do {
 		try {
 			auto clrecv_char = sock.srecv_char(65535);
-			string clrecv(clrecv_char.value, clrecv_char.value + clrecv_char.length);
+			string clrecv((char*)clrecv_char.value, clrecv_char.length);
 
 			if (clrecv.length() == 0) {
 				break;
@@ -128,7 +130,7 @@ void handler(SSocket sock) {
 				while (length > 0) {
 					auto datarecv = sock.srecv_char(65535);
 					if (datarecv.length == 0) return;
-					httpdata.append(datarecv.value, datarecv.value + datarecv.length);
+					httpdata.append((char*)datarecv.value, (char*)datarecv.value + datarecv.length);
 
 					length -= datarecv.length;
 				}
@@ -243,9 +245,11 @@ int main(int argc, char** argv) {
 		sock.ssetsockopt(SOL_SOCKET, SO_REUSEADDR, 1);
 		sock.sbind("", port);
 		sock.slisten(0);
-	} catch (int e) { cout << "Error: " <<  strerror(e) << endl; exit(e); }
-	
+	} catch (int e) { cout << "Error: " <<  sstrerror(e) << endl; exit(e); }
+
+#ifndef _WIN32
 	for (int i = 1; i < pp; i++) process("HTTP Worker").start([&](process){ while (true) try { thread(handler, sock.saccept()).detach(); } catch (...) {} })->detach();
+#endif
 
 	while (true) try { thread(handler, sock.saccept()).detach(); } catch (...) {}
 }
