@@ -1,4 +1,4 @@
-// version 1.4
+// version 1.5
 #define _DISABLE_RECV_LIMIT
 #include <thread>
 #include <vector>
@@ -17,6 +17,7 @@ using namespace std;
 namespace fs = std::filesystem;
 
 map<string, string> contenttype = { {"html", "text/html"}, {"htm", "text/html"}, {"txt", "text/plain"}, {"py", "text/x-python"}, {"ico", "image/x-icon"}, {"css", "text/css"}, {"js", "application/javascript"}, {"jpg", "image/jpeg"},{"png", "image/png"}, {"gif", "image/gif"}, {"mp3", "audio/mp3"}, {"ogg", "audio/ogg"}, {"wav", "audio/wav"}, {"opus", "audio/opus"}, {"m4a", "audio/mp4"}, {"mp4", "video/mp4"}, {"webm", "video/webm"}, {"pdf", "application/pdf"}, {"json", "text/json"}, {"xml", "text/xml"}, {"image", "svg+xml"}, {"other", "application/octet-stream"}};
+vector<string> methods = { "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH" };
 vector<string> cgidirs = { "cgi-bin", "htbin" };
 int recvtimeout;
 
@@ -82,58 +83,81 @@ void socksend(SSocket sock, srvresp data) {
 
 void handler(SSocket sock) {
 	sock.setrecvtimeout(recvtimeout);
+	
 	bool connection_keep_alive = false;
 	string client_connection = "close";
 
 	do {
 		try {
-			auto clrecv_char = sock.srecv_char(65535);
+			if (!connection_keep_alive) this_thread::sleep_for(1ms);
+
+			auto clrecv_char = sock.srecv_char(32768);
+			if (clrecv_char.length == 0) break;
+
 			string clrecv((char*)clrecv_char.value, clrecv_char.length);
 
-			if (clrecv.length() == 0) {
-				break;
-			}
-
 			auto clrtmp = split(clrecv, "\r\n\r\n", 1);
+
+			if (clrtmp.size() < 2) throw 400;
+
 			string httphead = clrtmp[0];
 			string httpdata = clrtmp[1];
 
 			vector<string> headtmp = split(httphead, "\r\n");
 			vector<string> httpstate = split(headtmp[0], " ");
 
-			if (httpstate.size() < 3) { throw 400; }
+			if (httpstate.size() < 3) throw 400;
 
 			string method = httpstate[0];
 			string default_path = urlDecode(httpstate[1]);
 			string custom_path = httpstate[1].substr(1);
 			string version = httpstate[2];
-			map<string, string> user_agent;
-			
-			fs::path path = fs::current_path() / strtou8(urlDecode(custom_path));
+			vector<string> uploaded_files;
+			map<string, map<string, string>> user_agent;
+			fs::path path;
+
+			if (find(methods.begin(), methods.end(), method) == methods.end()) throw 400;
+
+			try { path = fs::current_path() / strtou8(urlDecode(custom_path)); } catch (...) { throw 400; }
 	//---------------------parsing user agent---------------------
 			for (int i = 1; i < headtmp.size(); i++) {
 				auto tmp = split(headtmp[i], ": ");
-				if (tmp.size() > 1) user_agent[tmp[0]] = tmp[1];
+
+				if (tmp.size() > 1) {
+					for (auto& j : split(tmp[1], "; ")) {
+						auto _tmp = split(j, "=");
+
+						if (_tmp.size() > 1) user_agent[tmp[0]][_tmp[0]] = _tmp[1];
+						else user_agent[tmp[0]][""] = _tmp[0];
+					}
+				}
 			}
 	//------------------------------------------------------------
 	//-----------------------get connection-----------------------
 	if (user_agent.find("Connection") != user_agent.end()) {
-		connection_keep_alive = (tolowerString(user_agent["Connection"]) == "keep-alive") ? true : false;
-		if (connection_keep_alive) client_connection = tolowerString(user_agent["Connection"]);
+		connection_keep_alive = (tolowerString(user_agent["Connection"][""]) == "keep-alive") ? true : false;
+		if (connection_keep_alive) client_connection = tolowerString(user_agent["Connection"][""]);
 	}
 	//------------------------------------------------------------
 	//----------------------recv client data----------------------
 			if (user_agent.find("Content-Type") != user_agent.end()) {
-				size_t length = stoull(user_agent["Content-Length"]);
+				string boundary = user_agent["Content-Type"]["boundary"];
+				size_t length = stoull(user_agent["Content-Length"][""]);
+
 				length -= httpdata.length();
 
 				while (length > 0) {
-					auto datarecv = sock.srecv_char(65535);
-					if (datarecv.length == 0) return;
-					httpdata.append((char*)datarecv.value, (char*)datarecv.value + datarecv.length);
+					auto datarecv = sock.srecv_char(32768);
+
+					if (datarecv.length == 0) throw 400;
+					httpdata.append((char*)datarecv.value, datarecv.length);
 
 					length -= datarecv.length;
 				}
+
+				uploaded_files = split(httpdata, "--" + boundary);
+				uploaded_files.erase(uploaded_files.begin());
+				uploaded_files.pop_back();
 			}
 	//------------------------------------------------------------
 			if (fs::exists(path)) {
@@ -174,7 +198,7 @@ void handler(SSocket sock) {
 					string ext = path.extension().string().substr(1);
 
 					if (user_agent.find("Range") != user_agent.end()) {
-						size_t range = stoull(split(split(user_agent["Range"], "=")[1], "-")[0]);
+						size_t range = stoull(split(user_agent["Range"]["bytes"], "-")[0]);
 						
 						srvresp resp;
 						resp.code = 206;
@@ -211,6 +235,7 @@ void handler(SSocket sock) {
 
 
 		} catch (int code) {
+			cout << "here " << code << endl;
 			switch (code) {
 				case 400: socksend(sock, { .code = code, .textdata = "<h1>400 Bad request</h1><br>", .connection = client_connection }); break;
 				case 403: socksend(sock, { .code = code, .textdata = "<h1>403 Forbidden</h1>", .connection = client_connection }); break;
@@ -219,6 +244,7 @@ void handler(SSocket sock) {
 			}
 		}
 	} while (connection_keep_alive);
+
 	sock.sclose();
 }
 
@@ -226,17 +252,17 @@ int main(int argc, char** argv) {
 	setlocale(LC_ALL, "");
 	
 	ArgumentParser parser(argc, argv);
-	parser.add_argument({ .flag1 = "-p", .flag2 = "--port", .type = "int" });
+	parser.add_argument({ .flag1 = "-p", .flag2 = "--port", .type = ANYINTEGER });
 	parser.add_argument({ .flag1 = "-rd", .flag2 = "--root-directory" });
-	parser.add_argument({ .flag1 = "-pp", .flag2 = "--parallel-processes", .type = "int" });
+	parser.add_argument({ .flag1 = "-pp", .flag2 = "--parallel-processes", .type = ANYINTEGER });
 	parser.add_argument({ .flag2 = "--CGI", .without_value = true });
-	parser.add_argument({ .flag1 = "-t", .flag2 = "--timeout", .type = "int" });
+	parser.add_argument({ .flag1 = "-t", .flag2 = "--timeout", .type = ANYINTEGER });
 	auto i = parser.parse();
 
-	int port = (i["--port"].str != "false") ? i["--port"].integer : 80;
-	if (i["--root-directory"].str != "false") fs::current_path(strtou8(i["--root-directory"].str));
-	int pp = (i["--parallel-processes"].str != "false") ? i["--parallel-processes"].integer : 1;
-	recvtimeout = (i["--timeout"].str != "false") ? i["--timeout"].integer : 5;
+	int port = (i["--port"].type != ANYNONE) ? i["--port"].integer : 80;
+	if (i["--root-directory"].type != ANYNONE) fs::current_path(strtou8(i["--root-directory"].str));
+	int pp = (i["--parallel-processes"].type != ANYNONE) ? i["--parallel-processes"].integer : 1;
+	recvtimeout = (i["--timeout"].type != ANYNONE) ? i["--timeout"].integer : 5;
 	
 	signal(SIGINT, [](int e){exit(0);});
 	SSocket sock(AF_INET, SOCK_STREAM);
