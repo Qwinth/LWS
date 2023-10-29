@@ -235,7 +235,6 @@ void handler(SSocket sock) {
 
 
 		} catch (int code) {
-			cout << "here " << code << endl;
 			switch (code) {
 				case 400: socksend(sock, { .code = code, .textdata = "<h1>400 Bad request</h1><br>", .connection = client_connection }); break;
 				case 403: socksend(sock, { .code = code, .textdata = "<h1>403 Forbidden</h1>", .connection = client_connection }); break;
