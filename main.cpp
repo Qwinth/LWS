@@ -43,7 +43,7 @@ void socksend(SSocket sock, srvresp data) {
 	}
 
 	headers += strformat("Connection: %s\r\n", data.connection.c_str());
-	if (tolowerString(data.connection) != "close") headers += strformat("Keep-Alive: timeout=%d, max=100\r\n", recvtimeout);
+	if (toLower(data.connection) != "close") headers += strformat("Keep-Alive: timeout=%d, max=100\r\n", recvtimeout);
 
 	headers += "Server: LWS\r\n";
 
@@ -91,10 +91,10 @@ void handler(SSocket sock) {
 		try {
 			if (!connection_keep_alive) this_thread::sleep_for(1ms);
 
-			auto clrecv_char = sock.srecv_char(32768);
+			auto clrecv_char = sock.srecv(32768);
 			if (clrecv_char.length == 0) break;
 
-			string clrecv((char*)clrecv_char.value, clrecv_char.length);
+			string clrecv = clrecv_char.string;
 
 			auto clrtmp = split(clrecv, "\r\n\r\n", 1);
 
@@ -135,8 +135,8 @@ void handler(SSocket sock) {
 	//------------------------------------------------------------
 	//-----------------------get connection-----------------------
 	if (user_agent.find("Connection") != user_agent.end()) {
-		connection_keep_alive = (tolowerString(user_agent["Connection"][""]) == "keep-alive") ? true : false;
-		if (connection_keep_alive) client_connection = tolowerString(user_agent["Connection"][""]);
+		connection_keep_alive = (toLower(user_agent["Connection"][""]) == "keep-alive") ? true : false;
+		if (connection_keep_alive) client_connection = toLower(user_agent["Connection"][""]);
 	}
 	//------------------------------------------------------------
 	//----------------------recv client data----------------------
@@ -147,10 +147,10 @@ void handler(SSocket sock) {
 				length -= httpdata.length();
 
 				while (length > 0) {
-					auto datarecv = sock.srecv_char(32768);
+					auto datarecv = sock.srecv(32768);
 
 					if (datarecv.length == 0) throw 400;
-					httpdata.append((char*)datarecv.value, datarecv.length);
+					httpdata += datarecv.string;
 
 					length -= datarecv.length;
 				}
@@ -263,7 +263,7 @@ int main(int argc, char** argv) {
 	if (i["--root-directory"].type != ANYNONE) fs::current_path(strtou8(i["--root-directory"].str));
 	int pp = (i["--parallel-processes"].type != ANYNONE) ? i["--parallel-processes"].integer : 1;
 	recvtimeout = (i["--timeout"].type != ANYNONE) ? i["--timeout"].integer : 5;
-	
+
 	signal(SIGINT, [](int e){exit(0);});
 	SSocket sock(AF_INET, SOCK_STREAM);
 	
@@ -274,8 +274,8 @@ int main(int argc, char** argv) {
 	} catch (int e) { cout << "Error: " <<  sstrerror(e) << endl; exit(e); }
 
 #ifndef _WIN32
-	for (int i = 1; i < pp; i++) process("HTTP Worker").start([&](process){ while (true) try { thread(handler, sock.saccept()).detach(); } catch (...) {} })->detach();
+	for (int i = 1; i < pp; i++) process("HTTP Worker").start([&](process){ while (true) try { thread(handler, sock.saccept().first).detach(); } catch (...) {} })->detach();
 #endif
 
-	while (true) try { thread(handler, sock.saccept()).detach(); } catch (...) {}
+	while (true) try { thread(handler, sock.saccept().first).detach(); } catch (...) {}
 }
