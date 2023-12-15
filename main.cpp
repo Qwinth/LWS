@@ -1,4 +1,4 @@
-// version 1.5.1
+// version 1.5.3
 #define _DISABLE_RECV_LIMIT
 #include <thread>
 #include <vector>
@@ -17,7 +17,7 @@ using namespace std;
 namespace fs = std::filesystem;
 
 map<string, string> contenttype = { {"html", "text/html"}, {"htm", "text/html"}, {"txt", "text/plain"}, {"py", "text/x-python"}, {"ico", "image/x-icon"}, {"css", "text/css"}, {"js", "application/javascript"}, {"jpg", "image/jpeg"},{"png", "image/png"}, {"gif", "image/gif"}, {"mp3", "audio/mp3"}, {"ogg", "audio/ogg"}, {"wav", "audio/wav"}, {"opus", "audio/opus"}, {"m4a", "audio/mp4"}, {"mp4", "video/mp4"}, {"webm", "video/webm"}, {"pdf", "application/pdf"}, {"json", "text/json"}, {"xml", "text/xml"}, {"image", "svg+xml"}, {"other", "application/octet-stream"}};
-vector<string> methods = { "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH" };
+vector<string> methods = { "GET", "HEAD", "POST" };
 vector<string> cgidirs = { "cgi-bin", "htbin" };
 int recvtimeout;
 
@@ -49,34 +49,29 @@ void socksend(SSocket sock, srvresp data) {
 
 	if (data.filestream) {
 		ifstream file(data.filepath, ios::binary);
+
 		if (data.ContentRange) {
 			headers += strformat("Content-Range: bytes %zu-%zu/%zu\r\n", data.ContentRangeData, data.filelength - 1, data.filelength);
 			headers += strformat("Content-Length: %zu\r\n\r\n", data.filelength - data.ContentRangeData);
 			file.seekg(data.ContentRangeData);
-		} else {
-			headers += strformat("Content-Length: %zu\r\n\r\n", data.filelength);
-		}
+		} else headers += strformat("Content-Length: %zu\r\n\r\n", data.filelength);
 		
 		sock.ssendall(headers);
 
-		if (data.method == "GET" || data.method == "POST") {
-			sock.ssend_file(file);
-		}
+		if (data.method == "GET" || data.method == "POST") sock.ssend_file(file);
 
 		file.close();
+
 	} else {
 		if (data.ContentRange) {
 			headers += strformat("Content-Range: bytes %zu-%zu/%zu\r\n", data.ContentRangeData, data.textdata.size() - 1, data.textdata.size());
 			headers += strformat("Content-Length: %zu\r\n\r\n", data.textdata.size() - data.ContentRangeData);
 			data.textdata = data.textdata.substr(data.ContentRangeData);
-		} else {
-			headers += strformat("Content-Length: %zu\r\n\r\n", data.textdata.size());
-		}
+		} else headers += strformat("Content-Length: %zu\r\n\r\n", data.textdata.size());
+
 		sock.ssendall(headers);
 
-		if (data.method == "GET" || data.method == "POST") {
-			sock.ssendall(data.textdata);
-		}
+		if (data.method == "GET" || data.method == "POST") sock.ssendall(data.textdata);
 	}
 
 }
@@ -89,12 +84,10 @@ void handler(SSocket sock) {
 
 	do {
 		try {
-			if (!connection_keep_alive) this_thread::sleep_for(1ms);
-
 			auto clrecv_char = sock.srecv(32768);
 			if (clrecv_char.length == 0) break;
 
-			string clrecv = clrecv_char.string;
+			string clrecv((char*)clrecv_char.buffer, clrecv_char.length);
 
 			auto clrtmp = split(clrecv, "\r\n\r\n", 1);
 
@@ -116,7 +109,7 @@ void handler(SSocket sock) {
 			map<string, map<string, string>> user_agent;
 			fs::path path;
 
-			if (find(methods.begin(), methods.end(), method) == methods.end()) throw 400;
+			if (find(methods.begin(), methods.end(), method) == methods.end()) throw 501;
 
 			try { path = fs::current_path() / strtou8(urlDecode(custom_path)); } catch (...) { throw 400; }
 	//---------------------parsing user agent---------------------
@@ -134,10 +127,9 @@ void handler(SSocket sock) {
 			}
 	//------------------------------------------------------------
 	//-----------------------get connection-----------------------
-	if (user_agent.find("Connection") != user_agent.end()) {
-		connection_keep_alive = (toLower(user_agent["Connection"][""]) == "keep-alive") ? true : false;
-		if (connection_keep_alive) client_connection = toLower(user_agent["Connection"][""]);
-	}
+	if (user_agent.find("Connection") != user_agent.end())
+		if ((connection_keep_alive = toLower(user_agent["Connection"][""]) == "keep-alive"))
+			client_connection = toLower(user_agent["Connection"][""]);
 	//------------------------------------------------------------
 	//----------------------recv client data----------------------
 			if (user_agent.find("Content-Type") != user_agent.end()) {
@@ -150,7 +142,7 @@ void handler(SSocket sock) {
 					auto datarecv = sock.srecv(32768);
 
 					if (datarecv.length == 0) throw 400;
-					httpdata += datarecv.string;
+					httpdata.append((char*)datarecv.buffer, datarecv.length);
 
 					length -= datarecv.length;
 				}
@@ -235,10 +227,12 @@ void handler(SSocket sock) {
 
 
 		} catch (int code) {
+			cout << code << endl;
 			switch (code) {
 				case 400: socksend(sock, { .code = code, .textdata = "<h1>400 Bad request</h1><br>", .connection = client_connection }); break;
 				case 403: socksend(sock, { .code = code, .textdata = "<h1>403 Forbidden</h1>", .connection = client_connection }); break;
 				case 404: socksend(sock, { .code = code, .textdata = "<h1>404 Not Found</h1>", .connection = client_connection }); break;
+				case 501: socksend(sock, { .code = code, .textdata = "<h1>501 Not Implemented</h1><br>", .connection = client_connection }); break;
 				default: socksend(sock, { .code = 500, .textdata = "<h1>500 Internal server error</h1><br>", .connection = client_connection }); break;
 			}
 		}
@@ -262,7 +256,7 @@ int main(int argc, char** argv) {
 	if (i["--root-directory"].type != ANYNONE) fs::current_path(strtou8(i["--root-directory"].str));
 	int pp = (i["--parallel-processes"].type != ANYNONE) ? i["--parallel-processes"].integer : 1;
 	recvtimeout = (i["--timeout"].type != ANYNONE) ? i["--timeout"].integer : 5;
-
+	
 	signal(SIGINT, [](int e){exit(0);});
 	SSocket sock(AF_INET, SOCK_STREAM);
 	
