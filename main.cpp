@@ -35,6 +35,14 @@ struct srvresp {
 	size_t ContentRangeData;
 };
 
+bool check_cgi(fs::path path) {
+	string str_path = path.string();
+	vector<string> path_split = split(str_path, '/');
+
+	for (string i : cgidirs) if (find(path_split.begin(), path_split.end(), i) != path_split.end()) return true;
+	return false;
+}
+
 void socksend(SSocket sock, srvresp data) {
 	string headers = strformat("HTTP/1.1 %d\r\nContent-Type: %s; charset=UTF-8\r\n", data.code, contenttype[data.ext].c_str());
 
@@ -154,6 +162,7 @@ void handler(SSocket sock) {
 	//------------------------------------------------------------
 			if (fs::exists(path)) {
 				if (fs::is_directory(path)) {
+					if (check_cgi(path)) throw 403;
 	//-------------------------index.html-------------------------
 					if (fs::exists(path / "index.html") && fs::is_regular_file(path / "index.html")) {
 
@@ -227,7 +236,6 @@ void handler(SSocket sock) {
 
 
 		} catch (int code) {
-			cout << code << endl;
 			switch (code) {
 				case 400: socksend(sock, { .code = code, .textdata = "<h1>400 Bad request</h1><br>", .connection = client_connection }); break;
 				case 403: socksend(sock, { .code = code, .textdata = "<h1>403 Forbidden</h1>", .connection = client_connection }); break;
