@@ -1,4 +1,4 @@
-// version 1.5.3
+// version 1.5.3-c1
 #define _DISABLE_RECV_LIMIT
 #include <thread>
 #include <vector>
@@ -15,6 +15,7 @@
 #endif
 using namespace std;
 namespace fs = std::filesystem;
+string lws_version = "1.5.3-c1";
 
 map<string, string> contenttype = { {"html", "text/html"}, {"htm", "text/html"}, {"txt", "text/plain"}, {"py", "text/x-python"}, {"ico", "image/x-icon"}, {"css", "text/css"}, {"js", "application/javascript"}, {"jpg", "image/jpeg"},{"png", "image/png"}, {"gif", "image/gif"}, {"mp3", "audio/mp3"}, {"ogg", "audio/ogg"}, {"wav", "audio/wav"}, {"opus", "audio/opus"}, {"m4a", "audio/mp4"}, {"mp4", "video/mp4"}, {"webm", "video/webm"}, {"pdf", "application/pdf"}, {"json", "text/json"}, {"xml", "text/xml"}, {"image", "svg+xml"}, {"other", "application/octet-stream"}};
 vector<string> methods = { "GET", "HEAD", "POST" };
@@ -53,7 +54,7 @@ void socksend(SSocket sock, srvresp data) {
 	headers += strformat("Connection: %s\r\n", data.connection.c_str());
 	if (toLower(data.connection) != "close") headers += strformat("Keep-Alive: timeout=%d, max=100\r\n", recvtimeout);
 
-	headers += "Server: LWS\r\n";
+	headers += strformat("Server: LWS/%s\r\n", lws_version.c_str());
 
 	if (data.filestream) {
 		ifstream file(data.filepath, ios::binary);
