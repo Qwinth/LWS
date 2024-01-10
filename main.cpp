@@ -1,4 +1,4 @@
-// version 1.5.3
+// version 1.5.4
 #define _DISABLE_RECV_LIMIT
 #include <thread>
 #include <vector>
@@ -7,9 +7,11 @@
 #include <filesystem>
 #include <set>
 #include <csignal>
+#include <cstdio>
 #include "cpplibs/ssocket.hpp"
 #include "cpplibs/strlib.hpp"
 #include "cpplibs/argparse.hpp"
+#include "cpplibs/libjson.hpp"
 #ifndef _WIN32
 #include "cpplibs/multiprocessing.hpp"
 #endif
@@ -120,7 +122,7 @@ void handler(SSocket sock) {
 			if (find(methods.begin(), methods.end(), method) == methods.end()) throw 501;
 
 			try { path = fs::current_path() / strtou8(urlDecode(custom_path)); } catch (...) { throw 400; }
-	//---------------------parsing user agent---------------------
+//---------------------parsing user agent---------------------
 			for (int i = 1; i < headtmp.size(); i++) {
 				auto tmp = split(headtmp[i], ": ");
 
@@ -133,13 +135,13 @@ void handler(SSocket sock) {
 					}
 				}
 			}
-	//------------------------------------------------------------
-	//-----------------------get connection-----------------------
+//------------------------------------------------------------
+//-----------------------get connection-----------------------
 	if (user_agent.find("Connection") != user_agent.end())
 		if ((connection_keep_alive = toLower(user_agent["Connection"][""]) == "keep-alive"))
 			client_connection = toLower(user_agent["Connection"][""]);
-	//------------------------------------------------------------
-	//----------------------recv client data----------------------
+//------------------------------------------------------------
+//----------------------recv client data----------------------
 			if (user_agent.find("Content-Type") != user_agent.end()) {
 				string boundary = user_agent["Content-Type"]["boundary"];
 				size_t length = stoull(user_agent["Content-Length"][""]);
@@ -159,11 +161,11 @@ void handler(SSocket sock) {
 				uploaded_files.erase(uploaded_files.begin());
 				uploaded_files.pop_back();
 			}
-	//------------------------------------------------------------
+//------------------------------------------------------------
 			if (fs::exists(path)) {
 				if (fs::is_directory(path)) {
 					if (check_cgi(path)) throw 403;
-	//-------------------------index.html-------------------------
+//-------------------------index.html-------------------------
 					if (fs::exists(path / "index.html") && fs::is_regular_file(path / "index.html")) {
 
 						socksend(sock, {.code = 200, .method = method, .connection = client_connection, .filestream = true, .filepath = path / "index.html", .filelength = fs::file_size(path / "index.html"), .AcceptRanges = true });
@@ -173,8 +175,8 @@ void handler(SSocket sock) {
 						socksend(sock, { .code = 200, .method = method, .connection = client_connection, .filestream = true, .filepath = path / "index.htm", .filelength = fs::file_size(path / "index.htm"), .AcceptRanges = true });
 
 					}
-	//------------------------------------------------------------
-	//----------------------directory listing---------------------
+//------------------------------------------------------------
+//----------------------directory listing---------------------
 					else {
 						string textdata = strformat("<!DOCTYPE html>\r\n<html>\r\n<head>\r\n<title>Directory listing for %s</title>\r\n</head>\r\n<body>\r\n<h1>Directory listing for %s</h1>\r\n<hr>\r\n<ul>\r\n", default_path.c_str(), default_path.c_str());
 						
@@ -193,46 +195,92 @@ void handler(SSocket sock) {
 						socksend(sock, { .code = 200, .textdata = textdata, .method = method, .connection = client_connection });
 					}
 				}
-	//------------------------------------------------------------
-	//-------------------process binary content-------------------
+//------------------------------------------------------------
+//----------------process binary content & CGI----------------
 				else {
 					string ext = path.extension().string().substr(1);
 
-					if (user_agent.find("Range") != user_agent.end()) {
-						size_t range = stoull(split(user_agent["Range"]["bytes"], "-")[0]);
+					if (check_cgi(path)) {
+						stringstream cmd_command;
+
+						Json json;
+						JsonNode node;
+						node.addPair("method", method);
+						node.addPair("version", version);
+						node.addPair("path", custom_path);
+
+						for (auto i : user_agent) {
+							JsonNode node2;
+							for (auto j : i.second) node2.addPair(j.first, j.second);
+							
+							node.addPair(i.first, node2);
+						}
+
+						if (ext == "py") {
+#ifdef _WIN32
+							cmd_command << "python " << path.string() << " " << quoted(json.dump(node));
+#else
+							cmd_command << "python3 " << path.string() << " " << quoted(json.dump(node));
+#endif
+						}
 						
-						srvresp resp;
-						resp.code = 206;
-						resp.ext = (contenttype.find(ext) != contenttype.end()) ? ext : "other";
-						resp.method = method;
-						resp.connection = client_connection;
-						resp.AcceptRanges = true;
-						resp.filestream = true;
-						resp.filepath = path;
-						resp.filelength = fs::file_size(path);
-						resp.ContentRange = true;
-						resp.ContentRangeData = range;
+						else if (ext == "bin") {
+							cmd_command << "./ " << path.string() << " " << quoted(json.dump(node));
+						}
 
-						socksend(sock, resp);
-					}
+						FILE* fp = popen(cmd_command.str().c_str(), "r");
+						char buffer[4096];
 
-					else {
+						string strbuff;
+						while (!feof(fp)) strbuff.append(buffer, fread(buffer, 1, 4096, fp));
+
 						srvresp resp;
 						resp.code = 200;
-						resp.ext = (contenttype.find(ext) != contenttype.end()) ? ext : "other";
 						resp.method = method;
 						resp.connection = client_connection;
-						resp.AcceptRanges = true;
-						resp.filestream = true;
-						resp.filepath = path;
-						resp.filelength = fs::file_size(path);
-						
+						resp.textdata = strbuff;
+
 						socksend(sock, resp);
+
+						pclose(fp);
+					}
+					
+					else {
+						if (user_agent.find("Range") != user_agent.end()) {
+							size_t range = stoull(split(user_agent["Range"]["bytes"], "-")[0]);
+							
+							srvresp resp;
+							resp.code = 206;
+							resp.ext = (contenttype.find(ext) != contenttype.end()) ? ext : "other";
+							resp.method = method;
+							resp.connection = client_connection;
+							resp.AcceptRanges = true;
+							resp.filestream = true;
+							resp.filepath = path;
+							resp.filelength = fs::file_size(path);
+							resp.ContentRange = true;
+							resp.ContentRangeData = range;
+
+							socksend(sock, resp);
+						}
+
+						else {
+							srvresp resp;
+							resp.code = 200;
+							resp.ext = (contenttype.find(ext) != contenttype.end()) ? ext : "other";
+							resp.method = method;
+							resp.connection = client_connection;
+							resp.AcceptRanges = true;
+							resp.filestream = true;
+							resp.filepath = path;
+							resp.filelength = fs::file_size(path);
+							
+							socksend(sock, resp);
+						}
 					}
 				}
-	//------------------------------------------------------------
-			}
-			else { throw 404; }
+//------------------------------------------------------------
+			} else { throw 404; }
 
 
 		} catch (int code) {
