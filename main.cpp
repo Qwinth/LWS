@@ -1,4 +1,4 @@
-// version 1.5.4-c1
+// version 1.5.5
 #define _DISABLE_RECV_LIMIT
 
 #ifndef _WIN32
@@ -24,9 +24,10 @@
 
 using namespace std;
 namespace fs = std::filesystem;
-string lws_version = "1.5.4-c1";
+string lws_version = "1.5.5";
 
 map<string, string> contenttype = { {"html", "text/html"}, {"htm", "text/html"}, {"txt", "text/plain"}, {"py", "text/x-python"}, {"ico", "image/x-icon"}, {"css", "text/css"}, {"js", "application/javascript"}, {"jpg", "image/jpeg"},{"png", "image/png"}, {"gif", "image/gif"}, {"mp3", "audio/mp3"}, {"ogg", "audio/ogg"}, {"wav", "audio/wav"}, {"opus", "audio/opus"}, {"m4a", "audio/mp4"}, {"mp4", "video/mp4"}, {"webm", "video/webm"}, {"pdf", "application/pdf"}, {"json", "text/json"}, {"xml", "text/xml"}, {"image", "svg+xml"}, {"other", "application/octet-stream"} };
+map<int, string> strcode = { {200, "OK"}, {206, "Partial Content"}, {400, "Bad Request"}, {403, "Forbidden"}, {404, "Not Found"}, {500, "Internal Server Error"}, {501, "Not Implemented"} };
 vector<string> methods = { "GET", "HEAD", "POST" };
 vector<string> cgidirs = { "cgi-bin", "htbin" };
 int recvtimeout;
@@ -54,7 +55,7 @@ bool check_cgi(fs::path path) {
 }
 
 void socksend(SSocket sock, srvresp data) {
-	string headers = strformat("HTTP/1.1 %d\r\nContent-Type: %s; charset=UTF-8\r\n", data.code, contenttype[data.ext].c_str());
+	string headers = strformat("HTTP/1.1 %d %s\r\nContent-Type: %s; charset=UTF-8\r\n", data.code, strcode[data.code], contenttype[data.ext].c_str());
 
 	if (data.AcceptRanges) {
 		headers += "Accept-Ranges: bytes\r\n";
