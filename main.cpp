@@ -1,5 +1,14 @@
-// version 1.5.4
+// version 1.5.4-c1
 #define _DISABLE_RECV_LIMIT
+
+#ifndef _WIN32
+#include "multiprocessing.hpp"
+#else
+#define ENABLE_U8STRING
+#define popen(a, b) _popen(a, b)
+#define pclose(a) _pclose(a)
+#endif
+
 #include <thread>
 #include <vector>
 #include <map>
@@ -8,18 +17,16 @@
 #include <set>
 #include <csignal>
 #include <cstdio>
-#include "cpplibs/ssocket.hpp"
-#include "cpplibs/strlib.hpp"
-#include "cpplibs/argparse.hpp"
-#include "cpplibs/libjson.hpp"
-#ifndef _WIN32
-#include "cpplibs/multiprocessing.hpp"
-#endif
+#include "ssocket.hpp"
+#include "strlib.hpp"
+#include "argparse.hpp"
+#include "libjson.hpp"
+
 using namespace std;
 namespace fs = std::filesystem;
-string lws_version = "1.5.4";
+string lws_version = "1.5.4-c1";
 
-map<string, string> contenttype = { {"html", "text/html"}, {"htm", "text/html"}, {"txt", "text/plain"}, {"py", "text/x-python"}, {"ico", "image/x-icon"}, {"css", "text/css"}, {"js", "application/javascript"}, {"jpg", "image/jpeg"},{"png", "image/png"}, {"gif", "image/gif"}, {"mp3", "audio/mp3"}, {"ogg", "audio/ogg"}, {"wav", "audio/wav"}, {"opus", "audio/opus"}, {"m4a", "audio/mp4"}, {"mp4", "video/mp4"}, {"webm", "video/webm"}, {"pdf", "application/pdf"}, {"json", "text/json"}, {"xml", "text/xml"}, {"image", "svg+xml"}, {"other", "application/octet-stream"}};
+map<string, string> contenttype = { {"html", "text/html"}, {"htm", "text/html"}, {"txt", "text/plain"}, {"py", "text/x-python"}, {"ico", "image/x-icon"}, {"css", "text/css"}, {"js", "application/javascript"}, {"jpg", "image/jpeg"},{"png", "image/png"}, {"gif", "image/gif"}, {"mp3", "audio/mp3"}, {"ogg", "audio/ogg"}, {"wav", "audio/wav"}, {"opus", "audio/opus"}, {"m4a", "audio/mp4"}, {"mp4", "video/mp4"}, {"webm", "video/webm"}, {"pdf", "application/pdf"}, {"json", "text/json"}, {"xml", "text/xml"}, {"image", "svg+xml"}, {"other", "application/octet-stream"} };
 vector<string> methods = { "GET", "HEAD", "POST" };
 vector<string> cgidirs = { "cgi-bin", "htbin" };
 int recvtimeout;
@@ -39,7 +46,7 @@ struct srvresp {
 };
 
 bool check_cgi(fs::path path) {
-	string str_path = path.string();
+	string str_path = u8tostr(path.u8string());
 	vector<string> path_split = split(str_path, '/');
 
 	for (string i : cgidirs) if (find(path_split.begin(), path_split.end(), i) != path_split.end()) return true;
@@ -65,20 +72,23 @@ void socksend(SSocket sock, srvresp data) {
 			headers += strformat("Content-Range: bytes %zu-%zu/%zu\r\n", data.ContentRangeData, data.filelength - 1, data.filelength);
 			headers += strformat("Content-Length: %zu\r\n\r\n", data.filelength - data.ContentRangeData);
 			file.seekg(data.ContentRangeData);
-		} else headers += strformat("Content-Length: %zu\r\n\r\n", data.filelength);
-		
+		}
+		else headers += strformat("Content-Length: %zu\r\n\r\n", data.filelength);
+
 		sock.ssendall(headers);
 
 		if (data.method == "GET" || data.method == "POST") sock.ssend_file(file);
 
 		file.close();
 
-	} else {
+	}
+	else {
 		if (data.ContentRange) {
 			headers += strformat("Content-Range: bytes %zu-%zu/%zu\r\n", data.ContentRangeData, data.textdata.size() - 1, data.textdata.size());
 			headers += strformat("Content-Length: %zu\r\n\r\n", data.textdata.size() - data.ContentRangeData);
 			data.textdata = data.textdata.substr(data.ContentRangeData);
-		} else headers += strformat("Content-Length: %zu\r\n\r\n", data.textdata.size());
+		}
+		else headers += strformat("Content-Length: %zu\r\n\r\n", data.textdata.size());
 
 		sock.ssendall(headers);
 
@@ -89,7 +99,7 @@ void socksend(SSocket sock, srvresp data) {
 
 void handler(SSocket sock) {
 	sock.setrecvtimeout(recvtimeout);
-	
+
 	bool connection_keep_alive = false;
 	string client_connection = "close";
 
@@ -122,8 +132,9 @@ void handler(SSocket sock) {
 
 			if (find(methods.begin(), methods.end(), method) == methods.end()) throw 501;
 
-			try { path = fs::current_path() / strtou8(urlDecode(custom_path)); } catch (...) { throw 400; }
-//---------------------parsing user agent---------------------
+			try { path = fs::current_path() / strtou8(urlDecode(custom_path)); }
+			catch (...) { throw 400; }
+			//---------------------parsing user agent---------------------
 			for (int i = 1; i < headtmp.size(); i++) {
 				auto tmp = split(headtmp[i], ": ");
 
@@ -136,13 +147,13 @@ void handler(SSocket sock) {
 					}
 				}
 			}
-//------------------------------------------------------------
-//-----------------------get connection-----------------------
-	if (user_agent.find("Connection") != user_agent.end())
-		if ((connection_keep_alive = toLower(user_agent["Connection"][""]) == "keep-alive"))
-			client_connection = toLower(user_agent["Connection"][""]);
-//------------------------------------------------------------
-//----------------------recv client data----------------------
+			//------------------------------------------------------------
+			//-----------------------get connection-----------------------
+			if (user_agent.find("Connection") != user_agent.end())
+				if ((connection_keep_alive = toLower(user_agent["Connection"][""]) == "keep-alive"))
+					client_connection = toLower(user_agent["Connection"][""]);
+			//------------------------------------------------------------
+			//----------------------recv client data----------------------
 			if (user_agent.find("Content-Type") != user_agent.end()) {
 				string boundary = user_agent["Content-Type"]["boundary"];
 				size_t length = stoull(user_agent["Content-Length"][""]);
@@ -162,29 +173,30 @@ void handler(SSocket sock) {
 				uploaded_files.erase(uploaded_files.begin());
 				uploaded_files.pop_back();
 			}
-//------------------------------------------------------------
+			//------------------------------------------------------------
 			if (fs::exists(path)) {
 				if (fs::is_directory(path)) {
 					if (check_cgi(path)) throw 403;
-//-------------------------index.html-------------------------
+					//-------------------------index.html-------------------------
 					if (fs::exists(path / "index.html") && fs::is_regular_file(path / "index.html")) {
 
-						socksend(sock, {.code = 200, .method = method, .connection = client_connection, .filestream = true, .filepath = path / "index.html", .filelength = fs::file_size(path / "index.html"), .AcceptRanges = true });
+						socksend(sock, { .code = 200, .method = method, .connection = client_connection, .filestream = true, .filepath = path / "index.html", .filelength = fs::file_size(path / "index.html"), .AcceptRanges = true });
 
-					} else if (fs::exists(path / "index.htm") && fs::is_regular_file(path / "index.htm")) {
+					}
+					else if (fs::exists(path / "index.htm") && fs::is_regular_file(path / "index.htm")) {
 
 						socksend(sock, { .code = 200, .method = method, .connection = client_connection, .filestream = true, .filepath = path / "index.htm", .filelength = fs::file_size(path / "index.htm"), .AcceptRanges = true });
 
 					}
-//------------------------------------------------------------
-//----------------------directory listing---------------------
+					//------------------------------------------------------------
+					//----------------------directory listing---------------------
 					else {
 						string textdata = strformat("<!DOCTYPE html>\r\n<html>\r\n<head>\r\n<title>Directory listing for %s</title>\r\n</head>\r\n<body>\r\n<h1>Directory listing for %s</h1>\r\n<hr>\r\n<ul>\r\n", default_path.c_str(), default_path.c_str());
-						
-						set<fs::path> sorted;
-						for (auto &i : fs::directory_iterator(path)) sorted.insert(i.path());
 
-						for (auto  &i : sorted) {
+						set<fs::path> sorted;
+						for (auto& i : fs::directory_iterator(path)) sorted.insert(i.path());
+
+						for (auto& i : sorted) {
 							auto fname = i.filename().u8string();
 
 							if (fs::is_directory(i)) { textdata += strformat("<li><a href = \"%s/\">%s</a></li>\r\n", urlEncode(u8tostr(fname)).c_str(), fname.c_str()); }
@@ -196,8 +208,8 @@ void handler(SSocket sock) {
 						socksend(sock, { .code = 200, .textdata = textdata, .method = method, .connection = client_connection });
 					}
 				}
-//------------------------------------------------------------
-//----------------process binary content & CGI----------------
+				//------------------------------------------------------------
+				//----------------process binary content & CGI----------------
 				else {
 					string ext = path.extension().string().substr(1);
 
@@ -213,7 +225,7 @@ void handler(SSocket sock) {
 						for (auto i : user_agent) {
 							JsonNode node2;
 							for (auto j : i.second) node2.addPair(j.first, j.second);
-							
+
 							node.addPair(i.first, node2);
 						}
 
@@ -224,7 +236,7 @@ void handler(SSocket sock) {
 							cmd_command << "python3 " << path.string() << " " << quoted(json.dump(node));
 #endif
 						}
-						
+
 						else if (ext == "bin") {
 							cmd_command << "./ " << path.string() << " " << quoted(json.dump(node));
 						}
@@ -245,11 +257,11 @@ void handler(SSocket sock) {
 
 						pclose(fp);
 					}
-					
+
 					else {
 						if (user_agent.find("Range") != user_agent.end()) {
 							size_t range = stoull(split(user_agent["Range"]["bytes"], "-")[0]);
-							
+
 							srvresp resp;
 							resp.code = 206;
 							resp.ext = (contenttype.find(ext) != contenttype.end()) ? ext : "other";
@@ -275,22 +287,24 @@ void handler(SSocket sock) {
 							resp.filestream = true;
 							resp.filepath = path;
 							resp.filelength = fs::file_size(path);
-							
+
 							socksend(sock, resp);
 						}
 					}
 				}
-//------------------------------------------------------------
-			} else { throw 404; }
+				//------------------------------------------------------------
+			}
+			else { throw 404; }
 
 
-		} catch (int code) {
+		}
+		catch (int code) {
 			switch (code) {
-				case 400: socksend(sock, { .code = code, .textdata = "<h1>400 Bad request</h1><br>", .connection = client_connection }); break;
-				case 403: socksend(sock, { .code = code, .textdata = "<h1>403 Forbidden</h1>", .connection = client_connection }); break;
-				case 404: socksend(sock, { .code = code, .textdata = "<h1>404 Not Found</h1>", .connection = client_connection }); break;
-				case 501: socksend(sock, { .code = code, .textdata = "<h1>501 Not Implemented</h1><br>", .connection = client_connection }); break;
-				default: socksend(sock, { .code = 500, .textdata = "<h1>500 Internal server error</h1><br>", .connection = client_connection }); break;
+			case 400: socksend(sock, { .code = code, .textdata = "<h1>400 Bad request</h1><br>", .connection = client_connection }); break;
+			case 403: socksend(sock, { .code = code, .textdata = "<h1>403 Forbidden</h1>", .connection = client_connection }); break;
+			case 404: socksend(sock, { .code = code, .textdata = "<h1>404 Not Found</h1>", .connection = client_connection }); break;
+			case 501: socksend(sock, { .code = code, .textdata = "<h1>501 Not Implemented</h1><br>", .connection = client_connection }); break;
+			default: socksend(sock, { .code = 500, .textdata = "<h1>500 Internal server error</h1><br>", .connection = client_connection }); break;
 			}
 		}
 	} while (connection_keep_alive);
@@ -300,7 +314,7 @@ void handler(SSocket sock) {
 
 int main(int argc, char** argv) {
 	setlocale(LC_ALL, "");
-	
+
 	ArgumentParser parser(argc, argv);
 	parser.add_argument({ .flag1 = "-p", .flag2 = "--port", .type = ANYINTEGER });
 	parser.add_argument({ .flag1 = "-rd", .flag2 = "--root-directory" });
@@ -313,19 +327,21 @@ int main(int argc, char** argv) {
 	if (i["--root-directory"].type != ANYNONE) fs::current_path(strtou8(i["--root-directory"].str));
 	int pp = (i["--parallel-processes"].type != ANYNONE) ? i["--parallel-processes"].integer : 1;
 	recvtimeout = (i["--timeout"].type != ANYNONE) ? i["--timeout"].integer : 5;
-	
-	signal(SIGINT, [](int e){exit(0);});
+
+	signal(SIGINT, [](int e) {exit(0); });
 	SSocket sock(AF_INET, SOCK_STREAM);
-	
+
 	try {
 		sock.ssetsockopt(SOL_SOCKET, SO_REUSEADDR, 1);
 		sock.sbind("", port);
 		sock.slisten(0);
-	} catch (int e) { cout << "Error: " <<  sstrerror(e) << endl; exit(e); }
+	}
+	catch (int e) { cout << "Error: " << sstrerror(e) << endl; exit(e); }
 
 #ifndef _WIN32
-	for (int i = 1; i < pp; i++) process("HTTP Worker").start([&](process){ while (true) try { thread(handler, sock.saccept().first).detach(); } catch (...) {} })->detach();
+	for (int i = 1; i < pp; i++) process("HTTP Worker").start([&](process) { while (true) try { thread(handler, sock.saccept().first).detach(); } catch (...) {} })->detach();
 #endif
 
-	while (true) try { thread(handler, sock.saccept().first).detach(); } catch (...) {}
+	while (true) try { thread(handler, sock.saccept().first).detach(); }
+	catch (...) {}
 }
