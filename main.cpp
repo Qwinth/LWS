@@ -2,7 +2,7 @@
 #define _DISABLE_RECV_LIMIT
 
 #ifndef _WIN32
-#include "multiprocessing.hpp"
+#include "cpplibs/multiprocessing.hpp"
 #else
 #define ENABLE_U8STRING
 #define popen(a, b) _popen(a, b)
@@ -17,10 +17,10 @@
 #include <set>
 #include <csignal>
 #include <cstdio>
-#include "ssocket.hpp"
-#include "strlib.hpp"
-#include "argparse.hpp"
-#include "libjson.hpp"
+#include "cpplibs/ssocket.hpp"
+#include "cpplibs/strlib.hpp"
+#include "cpplibs/argparse.hpp"
+#include "cpplibs/libjson.hpp"
 
 using namespace std;
 namespace fs = std::filesystem;
