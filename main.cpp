@@ -1,8 +1,8 @@
-// version 1.5.5
+// version 1.5.6
 #define _DISABLE_RECV_LIMIT
 
 #ifndef _WIN32
-#include "cpplibs/multiprocessing.hpp"
+#include "cpplibs/libmultiprocessing.hpp"
 #else
 #define ENABLE_U8STRING
 #define popen(a, b) _popen(a, b)
@@ -17,16 +17,17 @@
 #include <set>
 #include <csignal>
 #include <cstdio>
-#include "cpplibs/ssocket.hpp"
-#include "cpplibs/strlib.hpp"
-#include "cpplibs/argparse.hpp"
+#include "cpplibs/libsocket.hpp"
+#include "cpplibs/libstrmanip.hpp"
+#include "cpplibs/libargparse.hpp"
 #include "cpplibs/libjson.hpp"
+#include "cpplibs/liburlcode.hpp"
 
 using namespace std;
 namespace fs = std::filesystem;
-string lws_version = "1.5.5";
+string lws_version = "1.5.6";
 
-map<string, string> contenttype = { {"html", "text/html"}, {"htm", "text/html"}, {"txt", "text/plain"}, {"py", "text/x-python"}, {"ico", "image/x-icon"}, {"css", "text/css"}, {"js", "application/javascript"}, {"jpg", "image/jpeg"},{"png", "image/png"}, {"gif", "image/gif"}, {"mp3", "audio/mp3"}, {"ogg", "audio/ogg"}, {"wav", "audio/wav"}, {"opus", "audio/opus"}, {"m4a", "audio/mp4"}, {"mp4", "video/mp4"}, {"webm", "video/webm"}, {"pdf", "application/pdf"}, {"json", "text/json"}, {"xml", "text/xml"}, {"image", "svg+xml"}, {"other", "application/octet-stream"} };
+map<string, string> contenttype = { {"html", "text/html"}, {"htm", "text/html"}, {"txt", "text/plain"}, {"ico", "image/x-icon"}, {"css", "text/css"}, {"js", "text/javascript"}, {"jpg", "image/jpeg"},{"png", "image/png"}, {"gif", "image/gif"}, {"mp3", "audio/mp3"}, {"ogg", "audio/ogg"}, {"wav", "audio/wav"}, {"opus", "audio/opus"}, {"m4a", "audio/mp4"}, {"mp4", "video/mp4"}, {"webm", "video/webm"}, {"pdf", "application/pdf"}, {"json", "text/json"}, {"xml", "text/xml"}, {"other", "application/octet-stream"} };
 map<int, string> strcode = { {200, "OK"}, {206, "Partial Content"}, {400, "Bad Request"}, {403, "Forbidden"}, {404, "Not Found"}, {500, "Internal Server Error"}, {501, "Not Implemented"} };
 vector<string> methods = { "GET", "HEAD", "POST" };
 vector<string> cgidirs = { "cgi-bin", "htbin" };
@@ -47,15 +48,16 @@ struct srvresp {
 };
 
 bool check_cgi(fs::path path) {
-	string str_path = u8tostr(path.u8string());
+	string str_path = path.u8string();
 	vector<string> path_split = split(str_path, '/');
 
 	for (string i : cgidirs) if (find(path_split.begin(), path_split.end(), i) != path_split.end()) return true;
 	return false;
 }
 
-void socksend(SSocket sock, srvresp data) {
-	string headers = strformat("HTTP/1.1 %d %s\r\nContent-Type: %s; charset=UTF-8\r\n", data.code, strcode[data.code], contenttype[data.ext].c_str());
+void socksend(Socket sock, srvresp data) {
+	// cout << data.textdata << endl;
+	string headers = strformat("HTTP/1.1 %d %s\r\nContent-Type: %s; charset=UTF-8\r\n", data.code, strcode[data.code].c_str(), contenttype[data.ext].c_str());
 
 	if (data.AcceptRanges) {
 		headers += "Accept-Ranges: bytes\r\n";
@@ -76,9 +78,9 @@ void socksend(SSocket sock, srvresp data) {
 		}
 		else headers += strformat("Content-Length: %zu\r\n\r\n", data.filelength);
 
-		sock.ssendall(headers);
+		sock.sendall(headers);
 
-		if (data.method == "GET" || data.method == "POST") sock.ssend_file(file);
+		if (data.method == "GET" || data.method == "POST") sock.send_file(file);
 
 		file.close();
 
@@ -91,27 +93,27 @@ void socksend(SSocket sock, srvresp data) {
 		}
 		else headers += strformat("Content-Length: %zu\r\n\r\n", data.textdata.size());
 
-		sock.ssendall(headers);
+		sock.sendall(headers);
 
-		if (data.method == "GET" || data.method == "POST") sock.ssendall(data.textdata);
+		if (data.method == "GET" || data.method == "POST") sock.sendall(data.textdata);
 	}
 
 }
 
-void handler(SSocket sock) {
-	sock.setrecvtimeout(recvtimeout);
-
-	bool connection_keep_alive = false;
-	string client_connection = "close";
+void handler(Socket sock) {
+	bool connection_keep_alive = true;
+	string client_connection = "Keep-Alive";
 
 	do {
 		try {
-			auto clrecv_char = sock.srecv(32768);
-			if (clrecv_char.length == 0) break;
+			sock.setrecvtimeout(recvtimeout);
+			auto clrecv_data = sock.recv(32768);
 
-			string clrecv((char*)clrecv_char.buffer, clrecv_char.length);
+			if (clrecv_data.size == 0) break;
+			// cout << clrecv_data.string << endl;
+			auto clrtmp = split(clrecv_data.string, "\r\n\r\n", 1);
 
-			auto clrtmp = split(clrecv, "\r\n\r\n", 1);
+			// cout << "clrtmp.size(): " << clrtmp.size() << endl;
 
 			if (clrtmp.size() < 2) throw 400;
 
@@ -127,14 +129,16 @@ void handler(SSocket sock) {
 			string default_path = urlDecode(httpstate[1]);
 			string custom_path = httpstate[1].substr(1);
 			string version = httpstate[2];
+
 			vector<string> uploaded_files;
 			map<string, map<string, string>> user_agent;
 			fs::path path;
 
 			if (find(methods.begin(), methods.end(), method) == methods.end()) throw 501;
 
-			try { path = fs::current_path() / strtou8(urlDecode(custom_path)); }
+			try { path = fs::current_path() / urlDecode(custom_path); }
 			catch (...) { throw 400; }
+
 			//---------------------parsing user agent---------------------
 			for (int i = 1; i < headtmp.size(); i++) {
 				auto tmp = split(headtmp[i], ": ");
@@ -162,12 +166,12 @@ void handler(SSocket sock) {
 				length -= httpdata.length();
 
 				while (length > 0) {
-					auto datarecv = sock.srecv(32768);
+					auto datarecv = sock.recv(32768);
 
-					if (datarecv.length == 0) throw 400;
-					httpdata.append((char*)datarecv.buffer, datarecv.length);
+					if (datarecv.size == 0) throw 400;
+					httpdata.append((char*)datarecv.buffer, datarecv.size);
 
-					length -= datarecv.length;
+					length -= datarecv.size;
 				}
 
 				uploaded_files = split(httpdata, "--" + boundary);
@@ -200,10 +204,10 @@ void handler(SSocket sock) {
 						for (auto& i : sorted) {
 							auto fname = i.filename().u8string();
 
-							if (fs::is_directory(i)) { textdata += strformat("<li><a href = \"%s/\">%s</a></li>\r\n", urlEncode(u8tostr(fname)).c_str(), fname.c_str()); }
-							else { textdata += strformat("<li><a href = \"%s\">%s</a></li>\r\n", urlEncode(u8tostr(fname)).c_str(), fname.c_str()); }
-
+							if (fs::is_directory(i)) { textdata += strformat("<li><a href = \"%s/\">%s</a></li>\r\n", urlEncode(fname).c_str(), fname.c_str()); }
+							else { textdata += strformat("<li><a href = \"%s\">%s</a></li>\r\n", urlEncode(fname).c_str(), fname.c_str()); }
 						}
+
 						textdata += "</ul>\r\n<hr>\r\n";
 
 						socksend(sock, { .code = 200, .textdata = textdata, .method = method, .connection = client_connection });
@@ -310,7 +314,7 @@ void handler(SSocket sock) {
 		}
 	} while (connection_keep_alive);
 
-	sock.sclose();
+	sock.close();
 }
 
 int main(int argc, char** argv) {
@@ -319,30 +323,30 @@ int main(int argc, char** argv) {
 	ArgumentParser parser(argc, argv);
 	parser.add_argument({ .flag1 = "-p", .flag2 = "--port", .type = ANYINTEGER });
 	parser.add_argument({ .flag1 = "-rd", .flag2 = "--root-directory" });
-	parser.add_argument({ .flag1 = "-pp", .flag2 = "--parallel-processes", .type = ANYINTEGER });
+	parser.add_argument({ .flag1 = "-pw", .flag2 = "--parallel-workers", .type = ANYINTEGER });
 	parser.add_argument({ .flag2 = "--CGI", .without_value = true });
 	parser.add_argument({ .flag1 = "-t", .flag2 = "--timeout", .type = ANYINTEGER });
 	auto i = parser.parse();
 
 	int port = (i["--port"].type != ANYNONE) ? i["--port"].integer : 80;
-	if (i["--root-directory"].type != ANYNONE) fs::current_path(strtou8(i["--root-directory"].str));
-	int pp = (i["--parallel-processes"].type != ANYNONE) ? i["--parallel-processes"].integer : 1;
+	if (i["--root-directory"].type != ANYNONE) fs::current_path(i["--root-directory"].str);
+	int pw = (i["--parallel-workers"].type != ANYNONE) ? i["--parallel-workers"].integer : 1;
 	recvtimeout = (i["--timeout"].type != ANYNONE) ? i["--timeout"].integer : 5;
 
-	signal(SIGINT, [](int e) {exit(0); });
-	SSocket sock(AF_INET, SOCK_STREAM);
+	signal(SIGINT, [](int) { exit(0); });
+
+	Socket sock(AF_INET, SOCK_STREAM);
 
 	try {
-		sock.ssetsockopt(SOL_SOCKET, SO_REUSEADDR, 1);
-		sock.sbind("", port);
-		sock.slisten(0);
-	}
-	catch (int e) { cout << "Error: " << sstrerror(e) << endl; exit(e); }
+		sock.setreuseaddr(true);
+		sock.bind("", port);
+		sock.listen(0);
+	} catch (int e) { cout << "Error: " << sstrerror(e) << endl; exit(e); }
 
 #ifndef _WIN32
-	for (int i = 1; i < pp; i++) process("HTTP Worker").start([&](process) { while (true) try { thread(handler, sock.saccept().first).detach(); } catch (...) {} })->detach();
+	for (int i = 1; i < pw; i++) process("HTTP Worker").start([&](process) { while (true) try { thread(handler, sock.accept()).detach(); } catch (...) {} })->detach();
 #endif
 
-	while (true) try { thread(handler, sock.saccept().first).detach(); }
+	while (true) try { thread(handler, sock.accept()).detach(); }
 	catch (...) {}
 }
