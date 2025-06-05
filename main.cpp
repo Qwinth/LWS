@@ -2,7 +2,7 @@
 #define _DISABLE_RECV_LIMIT
 
 #ifndef _WIN32
-#include "cpplibs/libmultiprocessing.hpp"
+// #include "cpplibs/libprocess.hpp"
 #else
 #define ENABLE_U8STRING
 #define popen(a, b) _popen(a, b)
@@ -109,9 +109,9 @@ void handler(Socket sock) {
 			sock.setrecvtimeout(recvtimeout);
 			auto clrecv_data = sock.recv(32768);
 
-			if (clrecv_data.size == 0) break;
-			// cout << clrecv_data.string << endl;
-			auto clrtmp = split(clrecv_data.string, "\r\n\r\n", 1);
+			if (clrecv_data.buffer.size() == 0) break;
+			cout << clrecv_data.buffer.toString() << endl;
+			auto clrtmp = split(clrecv_data.buffer.toString(), "\r\n\r\n", 1);
 
 			// cout << "clrtmp.size(): " << clrtmp.size() << endl;
 
@@ -126,7 +126,7 @@ void handler(Socket sock) {
 			if (httpstate.size() < 3) throw 400;
 
 			string method = httpstate[0];
-			string default_path = urlDecode(httpstate[1]);
+			string default_path = uriDecode(httpstate[1]);
 			string custom_path = httpstate[1].substr(1);
 			string version = httpstate[2];
 
@@ -136,7 +136,7 @@ void handler(Socket sock) {
 
 			if (find(methods.begin(), methods.end(), method) == methods.end()) throw 501;
 
-			try { path = fs::current_path() / urlDecode(custom_path); }
+			try { path = fs::current_path() / uriDecode(custom_path); }
 			catch (...) { throw 400; }
 
 			//---------------------parsing user agent---------------------
@@ -168,10 +168,10 @@ void handler(Socket sock) {
 				while (length > 0) {
 					auto datarecv = sock.recv(32768);
 
-					if (datarecv.size == 0) throw 400;
-					httpdata.append((char*)datarecv.buffer, datarecv.size);
+					if (datarecv.buffer.size() == 0) throw 400;
+					httpdata.append((char*)datarecv.buffer.c_str(), datarecv.buffer.size());
 
-					length -= datarecv.size;
+					length -= datarecv.buffer.size();
 				}
 
 				uploaded_files = split(httpdata, "--" + boundary);
@@ -204,8 +204,8 @@ void handler(Socket sock) {
 						for (auto& i : sorted) {
 							auto fname = i.filename().u8string();
 
-							if (fs::is_directory(i)) { textdata += strformat("<li><a href = \"%s/\">%s</a></li>\r\n", urlEncode(fname).c_str(), fname.c_str()); }
-							else { textdata += strformat("<li><a href = \"%s\">%s</a></li>\r\n", urlEncode(fname).c_str(), fname.c_str()); }
+							if (fs::is_directory(i)) { textdata += strformat("<li><a href = \"%s/\">%s</a></li>\r\n", uriEncode(fname).c_str(), fname.c_str()); }
+							else { textdata += strformat("<li><a href = \"%s\">%s</a></li>\r\n", uriEncode(fname).c_str(), fname.c_str()); }
 						}
 
 						textdata += "</ul>\r\n<hr>\r\n";
@@ -344,7 +344,7 @@ int main(int argc, char** argv) {
 	} catch (int e) { cout << "Error: " << sstrerror(e) << endl; exit(e); }
 
 #ifndef _WIN32
-	for (int i = 1; i < pw; i++) process("HTTP Worker").start([&](process) { while (true) try { thread(handler, sock.accept()).detach(); } catch (...) {} })->detach();
+	// for (int i = 1; i < pw; i++) process("HTTP Worker").start([&](process) { while (true) try { thread(handler, sock.accept()).detach(); } catch (...) {} })->detach();
 #endif
 
 	while (true) try { thread(handler, sock.accept()).detach(); }
